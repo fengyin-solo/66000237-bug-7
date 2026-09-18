@@ -43,6 +43,25 @@ function generatePQRSTCycle(tNorm: number, config: LeadConfig): number {
   return p + q + r + s + tWave + st;
 }
 
+// Np.convolve(x, kernel, mode='same') with zero padding, used to mirror the
+// backend's moving-window integration so local and backend results agree.
+function convolveSame(x: number[], kernel: number[]): number[] {
+  const n = x.length;
+  const k = kernel.length;
+  const out = new Array<number>(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    let sum = 0;
+    for (let j = 0; j < k; j++) {
+      const xi = i + j - Math.floor((k - 1) / 2);
+      if (xi >= 0 && xi < n) {
+        sum += x[xi] * kernel[j];
+      }
+    }
+    out[i] = sum;
+  }
+  return out;
+}
+
 export const useECGStore = defineStore('ecg', () => {
   // State
   const selectedLead = ref<string>('II');
@@ -64,7 +83,7 @@ export const useECGStore = defineStore('ecg', () => {
   // Getters
   const currentSamples = computed(() => ecgData.value?.samples ?? []);
   const currentRPeaks = computed(() => ecgData.value?.rPeaks ?? []);
-  const currentHeartRate = computed(() => hrvData.value?.heartRate ?? heartRate.value);
+  const currentHeartRate = computed(() => hrvData.value?.heartRate ?? 0);
 
   // Actions
 
@@ -104,48 +123,73 @@ export const useECGStore = defineStore('ecg', () => {
   }
 
   /**
-   * Pan-Tompkins R-peak detection algorithm
-   * Simplified implementation: bandpass -> differentiate -> square -> integrate -> threshold
+   * Polarity-independent R-peak detection (simplified Pan-Tompkins).
+   * Mirrors the backend pipeline: baseline removal -> differentiate ->
+   * square -> moving-window integration -> adaptive threshold.
+   *
+   * QRS complexes are sharp regardless of lead polarity, so the
+   * derivative energy detects positive-R leads (I/II/aVF/...) and
+   * negative-R leads (aVR) alike. Each detected heartbeat is refined to
+   * the largest absolute deflection in the original signal.
    */
   function detectRPeaks(samples: number[], sr: number): RPeak[] {
-    const rPeaks: RPeak[] = [];
-    const minDistance = Math.floor(0.2 * sr); // 200ms minimum between peaks
+    const n = samples.length;
+    if (n < 3) return [];
 
-    // Simple moving average for baseline
-    const windowSize = Math.floor(0.15 * sr);
-    const threshold = samples.reduce((a, b) => a + b, 0) / samples.length;
-    const stdDev = Math.sqrt(
-      samples.reduce((sum, s) => sum + (s - threshold) ** 2, 0) / samples.length
+    // 1. Remove DC offset / baseline wander
+    const mean = samples.reduce((a, b) => a + b, 0) / n;
+    const centered = samples.map((s) => s - mean);
+
+    // 2. Differentiate, 3. square (derivative energy, polarity independent)
+    const squared: number[] = new Array(n - 1);
+    for (let i = 0; i < n - 1; i++) {
+      const d = centered[i + 1] - centered[i];
+      squared[i] = d * d;
+    }
+
+    // 4. Moving-window integration (150 ms window), same as np.convolve(mode='same')
+    const windowSize = Math.max(1, Math.floor(0.15 * sr));
+    const kernel = new Array<number>(windowSize).fill(1 / windowSize);
+    const integrated = convolveSame(squared, kernel);
+
+    // 5. Adaptive threshold
+    const intMean = integrated.reduce((a, b) => a + b, 0) / integrated.length;
+    const intStd = Math.sqrt(
+      integrated.reduce((sum, v) => sum + (v - intMean) ** 2, 0) / integrated.length
     );
-    const detectionThreshold = threshold + 0.5 * stdDev;
+    const detectionThreshold = intMean + 0.5 * intStd;
+    const minDistance = Math.floor(0.2 * sr); // at most 300 BPM
 
-    let lastPeakIndex = -minDistance;
+    const rPeaks: RPeak[] = [];
+    const usedIndices = new Set<number>();
+    let lastPeak = -minDistance;
 
-    for (let i = 1; i < samples.length - 1; i++) {
-      if (
-        samples[i] > detectionThreshold &&
-        samples[i] > samples[i - 1] &&
-        samples[i] > samples[i + 1] &&
-        i - lastPeakIndex >= minDistance
-      ) {
-        // Find local maximum in a small window
-        let maxVal = samples[i];
-        let maxIdx = i;
-        const searchRadius = Math.floor(0.01 * sr);
-        for (let j = Math.max(0, i - searchRadius); j < Math.min(samples.length, i + searchRadius); j++) {
-          if (samples[j] > maxVal) {
-            maxVal = samples[j];
-            maxIdx = j;
-          }
+    for (let i = 1; i < integrated.length - 1; i++) {
+      if (integrated[i] <= detectionThreshold) continue;
+      if (i - lastPeak < minDistance) continue;
+
+      // Refine to the largest absolute deflection (true R-peak tip,
+      // positive or negative) in the original signal within ±half window
+      const searchStart = Math.max(0, i - Math.floor(windowSize / 2));
+      const searchEnd = Math.min(n, i + Math.floor(windowSize / 2));
+      let localPeak = searchStart;
+      let localMax = Math.abs(centered[searchStart]);
+      for (let j = searchStart + 1; j < searchEnd; j++) {
+        if (Math.abs(centered[j]) > localMax) {
+          localMax = Math.abs(centered[j]);
+          localPeak = j;
         }
-
-        rPeaks.push({
-          index: maxIdx,
-          time: maxIdx / sr,
-          amplitude: maxVal,
-        });
-        lastPeakIndex = i;
       }
+
+      if (!usedIndices.has(localPeak)) {
+        usedIndices.add(localPeak);
+        rPeaks.push({
+          index: localPeak,
+          time: localPeak / sr,
+          amplitude: samples[localPeak],
+        });
+      }
+      lastPeak = i;
     }
 
     return rPeaks;
@@ -156,8 +200,11 @@ export const useECGStore = defineStore('ecg', () => {
    * SDNN, RMSSD, pNN50
    */
   function calculateHRV(rPeaks: RPeak[], sr: number): HRVData {
+    // Fewer than 3 peaks means fewer than 2 RR intervals: heart rate cannot
+    // be estimated. Return zeroes and let the caller report insufficient
+    // data instead of pretending it equals the configured simulation rate.
     if (rPeaks.length < 3) {
-      return { heartRate: heartRate.value, sdnn: 0, rmssd: 0, pnn50: 0, nnIntervals: [] };
+      return { heartRate: 0, sdnn: 0, rmssd: 0, pnn50: 0, nnIntervals: [] };
     }
 
     const nnIntervals: number[] = [];
@@ -199,11 +246,25 @@ export const useECGStore = defineStore('ecg', () => {
   }
 
   /**
-   * Arrhythmia detection: tachycardia, bradycardia, ST-elevation
+   * Arrhythmia detection: tachycardia, bradycardia, ST-elevation,
+   * irregular rhythm. When too few beats were counted, no rate-based
+   * conclusion (too fast / too slow) is emitted.
    */
   function detectArrhythmias(hrv: HRVData, rPeaks: RPeak[], samples: number[], sr: number): ArrhythmiaEvent[] {
     const events: ArrhythmiaEvent[] = [];
     const hr = hrv.heartRate;
+
+    // Not enough heartbeats to judge rhythm — do not guess tachy/brady.
+    if (rPeaks.length < 3 || hr <= 0) {
+      return [
+        {
+          eventType: 'insufficient_data',
+          confidence: 1.0,
+          description: `仅检测到 ${rPeaks.length} 次心跳，数据不足，无法判断心率是否过快或过慢`,
+          timestamp: rPeaks[0]?.time ?? 0,
+        },
+      ];
+    }
 
     if (hr > 100) {
       events.push({
@@ -214,7 +275,7 @@ export const useECGStore = defineStore('ecg', () => {
       });
     }
 
-    if (hr < 60 && hr > 0) {
+    if (hr < 60) {
       events.push({
         eventType: 'bradycardia',
         confidence: Math.min(1.0, (60 - hr) / 30 + 0.6),
@@ -223,15 +284,32 @@ export const useECGStore = defineStore('ecg', () => {
       });
     }
 
-    // ST-segment elevation detection
+    // ST-segment elevation detection. Windows scale with the beat-to-beat
+    // cycle length so they land on the ST segment (normalized 0.36-0.40)
+    // and PR baseline (normalized 0.06-0.11) at every heart rate; fixed
+    // millisecond windows would sample the T wave during tachycardia.
+    // Per-beat cycle length (samples); fall back to the mean RR for the
+    // first and last beat which have no interval on one side.
+    const meanPeriod =
+      rPeaks.length > 1
+        ? (rPeaks[rPeaks.length - 1].index - rPeaks[0].index) / (rPeaks.length - 1)
+        : 0;
+    const rrPeriods = rPeaks.map((rp, k) => {
+      const next = rPeaks[k + 1];
+      return next ? next.index - rp.index : meanPeriod;
+    });
+    let rrIdx = 0;
     let stElevationCount = 0;
     for (const rp of rPeaks) {
-      const stStart = rp.index + Math.floor(0.08 * sr);
-      const stEnd = rp.index + Math.floor(0.12 * sr);
-      if (stEnd < samples.length) {
+      const beatPeriod = rrPeriods[rrIdx++] ?? 0;
+      if (beatPeriod <= 0) continue;
+      const stStart = rp.index + Math.floor(0.1 * beatPeriod);
+      const stEnd = rp.index + Math.floor(0.14 * beatPeriod);
+      const blStart = Math.max(0, rp.index - Math.floor(0.2 * beatPeriod));
+      const blEnd = Math.max(0, rp.index - Math.floor(0.15 * beatPeriod));
+      if (stEnd < samples.length && blEnd > blStart) {
         const stLevel = samples.slice(stStart, stEnd).reduce((a, b) => a + b, 0) / (stEnd - stStart);
-        const blStart = Math.max(0, rp.index - Math.floor(0.2 * sr));
-        const baseline = samples.slice(blStart, rp.index).reduce((a, b) => a + b, 0) / (rp.index - blStart);
+        const baseline = samples.slice(blStart, blEnd).reduce((a, b) => a + b, 0) / (blEnd - blStart);
         if (stLevel - baseline > 0.1) {
           stElevationCount++;
         }
@@ -244,6 +322,23 @@ export const useECGStore = defineStore('ecg', () => {
         description: '检测到 ST 段抬高，可能提示心肌梗死',
         timestamp: rPeaks[0]?.time ?? 0,
       });
+    }
+
+    // Irregular rhythm detection (high SDNN relative to mean RR)
+    if (hrv.nnIntervals.length > 3) {
+      const meanNN = hrv.nnIntervals.reduce((a, b) => a + b, 0) / hrv.nnIntervals.length;
+      const sdNN = Math.sqrt(
+        hrv.nnIntervals.reduce((sum, x) => sum + (x - meanNN) ** 2, 0) / hrv.nnIntervals.length
+      );
+      const cv = meanNN > 0 ? sdNN / meanNN : 0;
+      if (cv > 0.15) {
+        events.push({
+          eventType: 'atrial_fibrillation',
+          confidence: Math.min(1.0, cv * 2),
+          description: 'RR 间期不规则，可能提示房颤',
+          timestamp: rPeaks[0]?.time ?? 0,
+        });
+      }
     }
 
     if (events.length === 0) {
@@ -259,9 +354,43 @@ export const useECGStore = defineStore('ecg', () => {
   }
 
   /**
+   * Overall rhythm diagnosis — same wording and ordering as the backend's
+   * get_rhythm_diagnosis so both analysis paths agree.
+   */
+  function getRhythmDiagnosis(events: ArrhythmiaEvent[], hrv: HRVData): string {
+    const types = events.map((e) => e.eventType);
+
+    if (types.includes('insufficient_data')) {
+      return '数据不足，无法给出心律诊断';
+    }
+    if (types.includes('st_elevation')) {
+      return 'ST 段抬高 - 建议立即就医检查';
+    }
+    if (types.includes('tachycardia') && types.includes('atrial_fibrillation')) {
+      return '快速房颤 - 建议进一步心脏评估';
+    }
+    if (types.includes('tachycardia')) {
+      return '窦性心动过速 - 请结合临床症状判断';
+    }
+    if (types.includes('bradycardia')) {
+      return '窦性心动过缓 - 建议关注心率变化';
+    }
+    if (types.includes('atrial_fibrillation')) {
+      return '心律不规则 - 疑似房颤，建议 Holter 监测';
+    }
+    return `正常窦性心律 | HR: ${hrv.heartRate.toFixed(0)} BPM | SDNN: ${hrv.sdnn.toFixed(1)} ms`;
+  }
+
+  /**
    * Run full ECG analysis (frontend simulation)
    */
   async function analyzeECG() {
+    // Clear previous run up front so no stale conclusion or numbers remain
+    // visible on the panel if the new run yields little/no data.
+    ecgData.value = null;
+    hrvData.value = null;
+    arrhythmiaEvents.value = [];
+    rhythmDiagnosis.value = '';
     isLoading.value = true;
 
     if (useBackend.value) {
@@ -277,13 +406,13 @@ export const useECGStore = defineStore('ecg', () => {
             heart_rate: heartRate.value,
           }),
         });
-        const data: ECGAnalysisResponse = await response.json();
+        const data = await response.json() as ECGAnalysisResponse;
         ecgData.value = {
           leadName: data.lead.lead_name,
           samplingRate: data.lead.sampling_rate,
           duration: data.lead.duration,
           samples: data.lead.samples,
-          rPeaks: data.lead.r_peaks.map((rp: any) => ({
+          rPeaks: data.lead.r_peaks.map((rp) => ({
             index: rp.index,
             time: rp.time,
             amplitude: rp.amplitude,
@@ -296,7 +425,7 @@ export const useECGStore = defineStore('ecg', () => {
           pnn50: data.hrv.pnn50,
           nnIntervals: data.hrv.nn_intervals,
         };
-        arrhythmiaEvents.value = data.arrhythmia_events.map((evt: any) => ({
+        arrhythmiaEvents.value = data.arrhythmia_events.map((evt) => ({
           eventType: evt.event_type,
           confidence: evt.confidence,
           description: evt.description,
@@ -319,18 +448,14 @@ export const useECGStore = defineStore('ecg', () => {
     const lead = generateECGWaveform();
     const peaks = detectRPeaks(lead.samples, lead.samplingRate);
     lead.rPeaks = peaks;
-    ecgData.value = lead;
 
     const hrv = calculateHRV(peaks, lead.samplingRate);
-    hrvData.value = hrv;
-
     const events = detectArrhythmias(hrv, peaks, lead.samples, lead.samplingRate);
-    arrhythmiaEvents.value = events;
 
-    const isNormal = events.some(e => e.eventType === 'normal');
-    rhythmDiagnosis.value = isNormal
-      ? `正常窦性心律 | HR: ${hrv.heartRate.toFixed(0)} BPM | SDNN: ${hrv.sdnn.toFixed(1)} ms`
-      : events.map(e => e.description).join(' | ');
+    ecgData.value = lead;
+    hrvData.value = hrv;
+    arrhythmiaEvents.value = events;
+    rhythmDiagnosis.value = getRhythmDiagnosis(events, hrv);
   }
 
   /**
@@ -409,5 +534,6 @@ export const useECGStore = defineStore('ecg', () => {
     detectRPeaks,
     calculateHRV,
     detectArrhythmias,
+    getRhythmDiagnosis,
   };
 });

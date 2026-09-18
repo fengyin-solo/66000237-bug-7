@@ -7,7 +7,7 @@
       <div class="metric-card bg-gray-800/60 rounded-lg p-3 border border-gray-700/50">
         <div class="text-xs text-gray-400 mb-1">心率 (HR)</div>
         <div class="text-2xl font-bold" :class="hrColor">
-          {{ hrvData?.heartRate?.toFixed(1) ?? '--' }}
+          {{ displayHR }}
           <span class="text-sm font-normal text-gray-400">BPM</span>
         </div>
         <div class="mt-1 h-1 rounded-full bg-gray-700 overflow-hidden">
@@ -22,7 +22,7 @@
       <div class="metric-card bg-gray-800/60 rounded-lg p-3 border border-gray-700/50">
         <div class="text-xs text-gray-400 mb-1">SDNN</div>
         <div class="text-2xl font-bold text-blue-400">
-          {{ hrvData?.sdnn?.toFixed(1) ?? '--' }}
+          {{ displaySDNN }}
           <span class="text-sm font-normal text-gray-400">ms</span>
         </div>
         <div class="mt-1 text-xs text-gray-500">
@@ -33,7 +33,7 @@
       <div class="metric-card bg-gray-800/60 rounded-lg p-3 border border-gray-700/50">
         <div class="text-xs text-gray-400 mb-1">RMSSD</div>
         <div class="text-2xl font-bold text-purple-400">
-          {{ hrvData?.rmssd?.toFixed(1) ?? '--' }}
+          {{ displayRMSSD }}
           <span class="text-sm font-normal text-gray-400">ms</span>
         </div>
         <div class="mt-1 text-xs text-gray-500">副交感神经活性指标</div>
@@ -42,7 +42,7 @@
       <div class="metric-card bg-gray-800/60 rounded-lg p-3 border border-gray-700/50">
         <div class="text-xs text-gray-400 mb-1">pNN50</div>
         <div class="text-2xl font-bold text-amber-400">
-          {{ hrvData?.pnn50?.toFixed(1) ?? '--' }}
+          {{ displayPNN50 }}
           <span class="text-sm font-normal text-gray-400">%</span>
         </div>
         <div class="mt-1 text-xs text-gray-500">相邻 RR 差值 > 50ms 占比</div>
@@ -73,15 +73,25 @@ const props = defineProps<{
 }>();
 
 const hrColor = computed(() => {
-  if (!props.hrvData) return 'text-gray-500';
+  if (!props.hrvData || props.hrvData.heartRate <= 0) return 'text-gray-500';
   const hr = props.hrvData.heartRate;
   if (hr > 100) return 'text-red-400';
   if (hr < 60) return 'text-yellow-400';
   return 'text-emerald-400';
 });
 
+const displayHR = computed(() => {
+  const hr = props.hrvData?.heartRate ?? 0;
+  return hr > 0 ? hr.toFixed(1) : '--';
+});
+
+const insufficient = computed(() => (props.hrvData?.heartRate ?? 0) <= 0);
+const displaySDNN = computed(() => (insufficient.value ? '--' : props.hrvData!.sdnn.toFixed(1)));
+const displayRMSSD = computed(() => (insufficient.value ? '--' : props.hrvData!.rmssd.toFixed(1)));
+const displayPNN50 = computed(() => (insufficient.value ? '--' : props.hrvData!.pnn50.toFixed(1)));
+
 const hrBarColor = computed(() => {
-  if (!props.hrvData) return 'bg-gray-500';
+  if (!props.hrvData || props.hrvData.heartRate <= 0) return 'bg-gray-600';
   const hr = props.hrvData.heartRate;
   if (hr > 100) return 'bg-red-500';
   if (hr < 60) return 'bg-yellow-500';
@@ -89,12 +99,12 @@ const hrBarColor = computed(() => {
 });
 
 const hrBarWidth = computed(() => {
-  if (!props.hrvData) return 0;
+  if (!props.hrvData || props.hrvData.heartRate <= 0) return 0;
   return Math.min(100, (props.hrvData.heartRate / 180) * 100);
 });
 
 const sdnnLevel = computed(() => {
-  if (!props.hrvData) return '';
+  if (!props.hrvData || insufficient.value) return '数据不足';
   const sdnn = props.hrvData.sdnn;
   if (sdnn > 50) return 'HRV 正常';
   if (sdnn > 20) return 'HRV 偏低';

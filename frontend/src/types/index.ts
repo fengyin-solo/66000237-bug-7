@@ -21,24 +21,54 @@ export interface HRVData {
 }
 
 export interface ArrhythmiaEvent {
-  eventType: 'normal' | 'tachycardia' | 'bradycardia' | 'st_elevation' | 'atrial_fibrillation' | 'premature_ventricular_contraction';
+  eventType: 'normal' | 'tachycardia' | 'bradycardia' | 'st_elevation' | 'atrial_fibrillation' | 'premature_ventricular_contraction' | 'insufficient_data';
   confidence: number;
   description: string;
   timestamp: number;
 }
 
+// Backend wire format (snake_case), as returned by POST /ecg/analyze
+export interface RPeakWire {
+  index: number;
+  time: number;
+  amplitude: number;
+}
+
+export interface HRVMetricsWire {
+  heart_rate: number;
+  sdnn: number;
+  rmssd: number;
+  pnn50: number;
+  nn_intervals: number[];
+}
+
+export interface ArrhythmiaEventWire {
+  event_type: ArrhythmiaEvent['eventType'];
+  confidence: number;
+  description: string;
+  timestamp: number;
+}
+
+export interface ECGLeadWire {
+  lead_name: string;
+  sampling_rate: number;
+  duration: number;
+  samples: number[];
+  r_peaks: RPeakWire[];
+}
+
 export interface ECGAnalysisResponse {
-  lead: ECGLead;
-  hrv: HRVData;
-  arrhythmiaEvents: ArrhythmiaEvent[];
-  rhythmDiagnosis: string;
+  lead: ECGLeadWire;
+  hrv: HRVMetricsWire;
+  arrhythmia_events: ArrhythmiaEventWire[];
+  rhythm_diagnosis: string;
 }
 
 export interface ECGAnalysisRequest {
-  leadName: string;
+  lead_name: string;
   duration: number;
-  samplingRate: number;
-  heartRate: number;
+  sampling_rate: number;
+  heart_rate: number;
 }
 
 export const LEAD_NAMES: string[] = [

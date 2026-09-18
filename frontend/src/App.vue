@@ -59,9 +59,9 @@
         </h3>
         <input
           type="range"
-          min="5"
+          min="1"
           max="30"
-          step="5"
+          step="1"
           v-model.number="store.duration"
           class="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
         />
@@ -184,6 +184,8 @@
                   ? 'bg-yellow-900/20 border-yellow-700/30 text-yellow-300'
                   : event.eventType === 'st_elevation'
                   ? 'bg-orange-900/20 border-orange-700/30 text-orange-300'
+                  : event.eventType === 'insufficient_data'
+                  ? 'bg-gray-800/40 border-gray-600/40 text-gray-300'
                   : 'bg-purple-900/20 border-purple-700/30 text-purple-300',
               ]"
             >
@@ -248,6 +250,7 @@ function getEventLabel(type: string): string {
     st_elevation: 'ST 段抬高',
     atrial_fibrillation: '房颤',
     premature_ventricular_contraction: '室性早搏',
+    insufficient_data: '数据不足',
   };
   return labels[type] || type;
 }
