@@ -25,6 +25,7 @@ class ArrhythmiaType(str, Enum):
     ST_ELEVATION = "st_elevation"
     AFIB = "atrial_fibrillation"
     PVC = "premature_ventricular_contraction"
+    INSUFFICIENT_DATA = "insufficient_data"
 
 
 class RPeak(BaseModel):

@@ -78,20 +78,21 @@ const chartOption = computed(() => {
     downsampledValues.push(props.samples[i]);
   }
 
-  // R-peak markers
+  // R-peak markers（负向峰如 aVR 的标签放在下方）
   const rPeakMarkers = props.rPeaks.map((rp) => ({
     name: 'R',
     coord: [(rp.time).toFixed(3), rp.amplitude],
     value: `${rp.amplitude.toFixed(2)} mV`,
     symbol: 'triangle',
     symbolSize: 10,
+    symbolRotate: rp.amplitude < 0 ? 180 : 0,
     itemStyle: { color: '#ef4444' },
     label: {
       show: true,
       formatter: 'R',
       color: '#ef4444',
       fontSize: 10,
-      position: 'top' as const,
+      position: (rp.amplitude < 0 ? 'bottom' : 'top') as const,
     },
   }));
 

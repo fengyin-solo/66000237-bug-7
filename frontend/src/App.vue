@@ -59,10 +59,11 @@
         </h3>
         <input
           type="range"
-          min="5"
+          min="1"
           max="30"
-          step="5"
-          v-model.number="store.duration"
+          step="1"
+          :value="store.duration"
+          @input="onDurationChange(Number(($event.target as HTMLInputElement).value))"
           class="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
         />
       </div>
@@ -184,6 +185,8 @@
                   ? 'bg-yellow-900/20 border-yellow-700/30 text-yellow-300'
                   : event.eventType === 'st_elevation'
                   ? 'bg-orange-900/20 border-orange-700/30 text-orange-300'
+                  : event.eventType === 'insufficient_data'
+                  ? 'bg-gray-800/40 border-gray-600/40 text-gray-300'
                   : 'bg-purple-900/20 border-purple-700/30 text-purple-300',
               ]"
             >
@@ -240,14 +243,20 @@ const avgRR = computed(() => {
   return avg.toFixed(1);
 });
 
-function getEventLabel(type: string): string {
-  const labels: Record<string, string> = {
+function onDurationChange(seconds: number) {
+  store.duration = seconds;
+  // 改了记录时长就重新跑当前这一段，避免面板残留旧时长的结论与数字
+  store.analyzeECG();
+}
+
+function getEventLabel(type: string): string {  const labels: Record<string, string> = {
     normal: '正常窦性心律',
     tachycardia: '心动过速',
     bradycardia: '心动过缓',
     st_elevation: 'ST 段抬高',
     atrial_fibrillation: '房颤',
     premature_ventricular_contraction: '室性早搏',
+    insufficient_data: '数据不足',
   };
   return labels[type] || type;
 }

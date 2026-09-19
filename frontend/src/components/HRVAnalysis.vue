@@ -7,8 +7,8 @@
       <div class="metric-card bg-gray-800/60 rounded-lg p-3 border border-gray-700/50">
         <div class="text-xs text-gray-400 mb-1">心率 (HR)</div>
         <div class="text-2xl font-bold" :class="hrColor">
-          {{ hrvData?.heartRate?.toFixed(1) ?? '--' }}
-          <span class="text-sm font-normal text-gray-400">BPM</span>
+          {{ hrDisplay }}
+          <span v-if="hasHR" class="text-sm font-normal text-gray-400">BPM</span>
         </div>
         <div class="mt-1 h-1 rounded-full bg-gray-700 overflow-hidden">
           <div
@@ -72,25 +72,29 @@ const props = defineProps<{
   hrvData: HRVData | null;
 }>();
 
+const hasHR = computed(() => !!props.hrvData && props.hrvData.heartRate > 0);
+
+const hrDisplay = computed(() => (hasHR.value ? props.hrvData!.heartRate.toFixed(1) : '--'));
+
 const hrColor = computed(() => {
-  if (!props.hrvData) return 'text-gray-500';
-  const hr = props.hrvData.heartRate;
+  if (!hasHR.value) return 'text-gray-500';
+  const hr = props.hrvData!.heartRate;
   if (hr > 100) return 'text-red-400';
   if (hr < 60) return 'text-yellow-400';
   return 'text-emerald-400';
 });
 
 const hrBarColor = computed(() => {
-  if (!props.hrvData) return 'bg-gray-500';
-  const hr = props.hrvData.heartRate;
+  if (!hasHR.value) return 'bg-gray-600';
+  const hr = props.hrvData!.heartRate;
   if (hr > 100) return 'bg-red-500';
   if (hr < 60) return 'bg-yellow-500';
   return 'bg-emerald-500';
 });
 
 const hrBarWidth = computed(() => {
-  if (!props.hrvData) return 0;
-  return Math.min(100, (props.hrvData.heartRate / 180) * 100);
+  if (!hasHR.value) return 0;
+  return Math.min(100, (props.hrvData!.heartRate / 180) * 100);
 });
 
 const sdnnLevel = computed(() => {

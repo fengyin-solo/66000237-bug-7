@@ -39,7 +39,7 @@ async def analyze_ecg(request: ECGAnalysisRequest):
     3. HRV metrics calculation
     4. Arrhythmia detection and classification
     """
-    # Generate ECG signal
+    # Generate ECG signal（生成时已做 4 位四舍五入，与前端逐样本一致）
     time_array, ecg_signal = generate_ecg_signal(
         lead_name=request.lead_name.value,
         duration=request.duration,
@@ -47,7 +47,7 @@ async def analyze_ecg(request: ECGAnalysisRequest):
         heart_rate=request.heart_rate,
     )
 
-    # Detect R-peaks using Pan-Tompkins algorithm
+    # Detect R-peaks using Pan-Tompkins algorithm（在与前端相同的信号上分析）
     r_peaks_raw = pan_tompkins_r_peak_detection(ecg_signal, request.sampling_rate)
     r_peaks = [
         RPeak(index=rp["index"], time=rp["time"], amplitude=rp["amplitude"])
@@ -74,7 +74,7 @@ async def analyze_ecg(request: ECGAnalysisRequest):
         )
 
     # Generate rhythm diagnosis
-    diagnosis = get_rhythm_diagnosis(arrhythmia_raw, hrv_raw)
+    diagnosis = get_rhythm_diagnosis(arrhythmia_raw, hrv_raw, len(r_peaks_raw))
 
     # Build lead data
     lead = ECGLead(

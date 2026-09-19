@@ -21,17 +21,34 @@ export interface HRVData {
 }
 
 export interface ArrhythmiaEvent {
-  eventType: 'normal' | 'tachycardia' | 'bradycardia' | 'st_elevation' | 'atrial_fibrillation' | 'premature_ventricular_contraction';
+  eventType: 'normal' | 'tachycardia' | 'bradycardia' | 'st_elevation' | 'atrial_fibrillation' | 'premature_ventricular_contraction' | 'insufficient_data';
   confidence: number;
   description: string;
   timestamp: number;
 }
 
 export interface ECGAnalysisResponse {
-  lead: ECGLead;
-  hrv: HRVData;
-  arrhythmiaEvents: ArrhythmiaEvent[];
-  rhythmDiagnosis: string;
+  lead: {
+    lead_name: string;
+    sampling_rate: number;
+    duration: number;
+    samples: number[];
+    r_peaks: RPeak[];
+  };
+  hrv: {
+    heart_rate: number;
+    sdnn: number;
+    rmssd: number;
+    pnn50: number;
+    nn_intervals: number[];
+  };
+  arrhythmia_events: {
+    event_type: ArrhythmiaEvent['eventType'];
+    confidence: number;
+    description: string;
+    timestamp: number;
+  }[];
+  rhythm_diagnosis: string;
 }
 
 export interface ECGAnalysisRequest {
